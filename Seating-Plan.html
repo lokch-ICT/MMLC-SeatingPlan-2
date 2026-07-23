@@ -1,0 +1,1755 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MMLC 座位表產生器</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- html2canvas & jsPDF for Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #f8fafc;
+        }
+        
+        .dragging {
+            opacity: 0.4;
+            transform: scale(0.95);
+        }
+
+        .drag-over {
+            border-color: #3b82f6 !important;
+            background-color: #eff6ff !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3) !important;
+        }
+
+        /* Seat cards — tall enough for class + Chinese + English (no clipping) */
+        .mmlc-card,
+        .seat-empty {
+            border: 1.5px solid #94a3b8;
+            background-color: #ffffff;
+            transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+            min-height: 7rem;
+            height: auto;
+            padding: 0.5rem 0.35rem !important;
+            overflow: visible;
+            flex: none;
+            min-width: 0;
+            box-sizing: border-box;
+            border-radius: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 0.15rem;
+        }
+
+        .mmlc-card:hover {
+            border-color: #64748b;
+        }
+
+        .seat-empty {
+            border-style: dashed;
+            background-color: rgba(248, 250, 252, 0.85);
+        }
+
+        .seat-class-no {
+            font-size: 0.68rem;
+            color: #475569;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            line-height: 1.15;
+            margin: 0;
+            flex-shrink: 0;
+            overflow: visible;
+        }
+
+        .seat-name-zh {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #0f172a;
+            line-height: 1.2;
+            width: 100%;
+            text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex-shrink: 0;
+            margin: 0;
+        }
+
+        .seat-name-en {
+            font-size: 0.7rem;
+            color: #334155;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            line-height: 1.15;
+            margin: 0;
+            width: 100%;
+            text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        /* SVG hexagon — works in print (clip-path often becomes a square) */
+        .hexagon-badge {
+            position: relative;
+            width: 52px;
+            height: 58px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .hexagon-badge svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .hexagon-badge span {
+            position: relative;
+            z-index: 1;
+            font-weight: 800;
+            color: #1e3a8a;
+            font-size: 1.25rem;
+            line-height: 1;
+        }
+
+        /* Clear visual grouping for each Pod (6 seats) */
+        .pod-row {
+            display: flex;
+            justify-content: stretch;
+            align-items: stretch;
+            gap: 0.75rem;
+            width: 100%;
+            margin-bottom: 0.75rem;
+        }
+
+        .pod-group {
+            flex: 1 1 0;
+            min-width: 0;
+            border: 2px solid var(--pod-border, #93c5fd);
+            background: var(--pod-bg, #f8fbff);
+            border-radius: 12px;
+            padding: 0.5rem 0.55rem 0.6rem;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            max-width: none;
+        }
+
+        .pod-group[data-pod="1"] { --pod-border: #3b82f6; --pod-bg: #eff6ff; --pod-label: #1d4ed8; }
+        .pod-group[data-pod="2"] { --pod-border: #0891b2; --pod-bg: #ecfeff; --pod-label: #0e7490; }
+        .pod-group[data-pod="3"] { --pod-border: #6366f1; --pod-bg: #eef2ff; --pod-label: #4338ca; }
+        .pod-group[data-pod="4"] { --pod-border: #0d9488; --pod-bg: #f0fdfa; --pod-label: #0f766e; }
+        .pod-group[data-pod="5"] { --pod-border: #8b5cf6; --pod-bg: #f5f3ff; --pod-label: #6d28d9; }
+        .pod-group[data-pod="6"] { --pod-border: #64748b; --pod-bg: #f8fafc; --pod-label: #334155; }
+
+        .pod-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 0.45rem;
+            padding-bottom: 0.35rem;
+            border-bottom: 1.5px dashed var(--pod-border, #93c5fd);
+        }
+
+        .pod-group-title {
+            font-size: 0.95rem;
+            font-weight: 800;
+            color: var(--pod-label, #1d4ed8);
+            letter-spacing: 0.04em;
+        }
+
+        .pod-group-body {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-auto-rows: minmax(7rem, auto);
+            gap: 0.4rem;
+            width: 100%;
+            flex: 1 1 auto;
+        }
+
+        .pod-group-body > .mmlc-card,
+        .pod-group-body > .seat-empty {
+            width: 100% !important;
+            min-height: 7rem !important;
+            height: auto !important;
+            flex: none !important;
+            box-sizing: border-box;
+        }
+
+        .pod-group .hexagon-badge {
+            width: 40px;
+            height: 44px;
+            color: var(--pod-border, #3b82f6);
+        }
+
+        .pod-group .hexagon-badge span {
+            font-size: 1.05rem;
+            color: var(--pod-label, #1d4ed8);
+        }
+
+        .pod-group .hexagon-badge svg polygon {
+            stroke: currentColor;
+            fill: #ffffff;
+        }
+
+        /*
+         * Shared Print + Export layout (A4 landscape).
+         * Export adds body.is-print-layout so PDF/PNG match Print exactly.
+         */
+        body.is-print-layout {
+            background: #fff !important;
+            color: #000 !important;
+            display: block !important;
+            min-height: 0 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+
+        body.is-print-layout .no-print,
+        body.is-print-layout #toastNotification,
+        body.is-print-layout #editDeskModal,
+        body.is-print-layout #editClassModal,
+        body.is-print-layout #addStudentModal,
+        body.is-print-layout #clearConfirmModal,
+        body.is-print-layout #uploadModal,
+        body.is-print-layout #sidebar {
+            display: none !important;
+        }
+
+        body.is-print-layout > .flex-1 {
+            display: block !important;
+            max-width: none !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            gap: 0 !important;
+            background: #fff !important;
+        }
+
+        body.is-print-layout #mainContent {
+            display: block !important;
+            overflow: visible !important;
+            width: 100% !important;
+            max-width: none !important;
+        }
+
+        /* A4 landscape content width ≈ 285mm @ 96dpi */
+        body.is-print-layout .mmlc-container,
+        body.is-print-layout #seatingContainer {
+            min-width: 0 !important;
+            width: 1077px !important;
+            max-width: 1077px !important;
+            margin: 0 auto !important;
+            padding: 8px !important;
+            box-shadow: none !important;
+            border: none !important;
+            border-radius: 0 !important;
+            background: #fff !important;
+            display: block !important;
+            overflow: visible !important;
+        }
+
+        body.is-print-layout #seatingContainer > .w-full.flex {
+            margin-bottom: 8px !important;
+        }
+
+        body.is-print-layout #classNameDisplay {
+            font-size: 22px !important;
+        }
+
+        body.is-print-layout #mmlcSeatingGrid {
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 10px !important;
+            margin: 0 !important;
+            max-width: none !important;
+            width: 100% !important;
+        }
+
+        body.is-print-layout .pod-row {
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: stretch !important;
+            gap: 10px !important;
+            margin: 0 0 0 0 !important;
+            width: 100% !important;
+        }
+
+        body.is-print-layout .pod-group {
+            flex: 1 1 0 !important;
+            max-width: none !important;
+            padding: 6px !important;
+            border-width: 2px !important;
+            border-radius: 6px !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+
+        body.is-print-layout .pod-group-header {
+            margin-bottom: 5px !important;
+            padding-bottom: 4px !important;
+            gap: 6px !important;
+        }
+
+        body.is-print-layout .pod-group-title {
+            font-size: 13px !important;
+        }
+
+        body.is-print-layout .pod-group-body {
+            display: grid !important;
+            grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+            grid-auto-rows: minmax(64px, auto) !important;
+            gap: 6px !important;
+        }
+
+        body.is-print-layout .hexagon-badge {
+            width: 28px !important;
+            height: 31px !important;
+        }
+
+        body.is-print-layout .hexagon-badge span {
+            font-size: 13px !important;
+        }
+
+        body.is-print-layout .mmlc-card,
+        body.is-print-layout .seat-empty {
+            min-height: 64px !important;
+            height: auto !important;
+            padding: 5px 4px !important;
+            border-radius: 4px !important;
+            box-shadow: none !important;
+            border: 1px solid #1e293b !important;
+            background: #fff !important;
+            overflow: visible !important;
+            flex: none !important;
+            width: 100% !important;
+            gap: 2px !important;
+        }
+
+        body.is-print-layout .seat-empty {
+            border-style: dashed !important;
+            border-color: #64748b !important;
+        }
+
+        body.is-print-layout .seat-class-no {
+            font-size: 10px !important;
+            color: #334155 !important;
+            line-height: 1.15 !important;
+            margin: 0 !important;
+            overflow: visible !important;
+        }
+
+        body.is-print-layout .seat-name-zh {
+            font-size: 13px !important;
+            font-weight: 700 !important;
+            color: #000 !important;
+            line-height: 1.2 !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            margin: 0 !important;
+        }
+
+        body.is-print-layout .seat-name-en {
+            font-size: 9px !important;
+            color: #1e293b !important;
+            line-height: 1.15 !important;
+            margin: 0 !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+
+        body.is-print-layout #studentCountBar {
+            margin-top: 10px !important;
+            padding-top: 8px !important;
+            border-top: 1px solid #e2e8f0 !important;
+            font-size: 12px !important;
+        }
+
+        /* Browser print uses same layout class + A4 page box */
+        @media print {
+            @page {
+                size: A4 landscape;
+                margin: 6mm;
+            }
+
+            html, body {
+                width: 100% !important;
+                height: auto !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                background: #fff !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+
+            body.is-print-layout #seatingContainer,
+            body.is-print-layout .mmlc-container {
+                width: 285mm !important;
+                max-width: 285mm !important;
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col">
+
+    <!-- Navbar -->
+    <header class="bg-slate-900 text-white shadow-md no-print sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="bg-blue-600 text-white p-2 rounded-lg shadow">
+                    <i class="fa-solid fa-desktop text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-wide">MMLC 座位表產生器</h1>
+                    <p class="text-xs text-slate-400">MMLC Classroom Seating Plan Studio</p>
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex flex-wrap items-center gap-2">
+                <button id="sidebarToggleBtn" onclick="toggleSidebar()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 shadow-sm mr-2">
+                    <i class="fa-solid fa-eye-slash"></i> 隱藏側欄
+                </button>
+                <button onclick="openUploadModal()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-file-import"></i> 匯入學生名單
+                </button>
+                <button onclick="loadMmlcDemoData()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 載入 3A 示範佈局
+                </button>
+                <button onclick="autoAssignRandom()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-shuffle"></i> 隨機編排
+                </button>
+                <button onclick="openClearConfirmModal()" class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-rotate-left"></i> 清空座位
+                </button>
+                <div class="h-4 w-px bg-slate-700 mx-1"></div>
+                <button onclick="exportToPDF()" id="pdfBtn" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-file-pdf"></i> 下載 PDF
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="flex-1 max-w-[1700px] w-full mx-auto p-4 flex flex-col lg:flex-row gap-6">
+
+        <!-- Sidebar: Unassigned Students -->
+        <aside id="sidebar" class="w-full lg:w-72 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col no-print h-[calc(100vh-100px)] sticky top-20 transition-all duration-300">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 rounded-t-xl">
+                <div>
+                    <h2 class="font-bold text-slate-800 flex items-center gap-2">
+                        <i class="fa-solid fa-users text-blue-600"></i> 未分配學生
+                    </h2>
+                    <p class="text-xs text-slate-500 mt-0.5" id="unassignedCount">共 0 人</p>
+                </div>
+                <button onclick="openAddStudentModal()" class="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-2.5 py-1.5 rounded transition font-medium">
+                    <i class="fa-solid fa-plus"></i> 新增
+                </button>
+            </div>
+
+            <!-- Search box -->
+            <div class="p-3 border-b border-slate-100">
+                <div class="relative">
+                    <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                    <input type="text" id="searchInput" oninput="filterUnassignedStudents()" placeholder="搜尋姓名或班號..." class="w-full pl-8 pr-3 py-1.5 bg-slate-100 text-xs rounded-lg border-0 focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+            </div>
+
+            <!-- Student List Container (Dropzone for unassigning) -->
+            <div id="unassignedList" 
+                 ondragover="handleDragOver(event)" 
+                 ondragleave="handleDragLeave(event)"
+                 ondrop="handleDropToUnassigned(event)"
+                 class="flex-1 overflow-y-auto p-3 space-y-2 min-h-[150px] transition-colors border-2 border-dashed border-transparent rounded-b-xl">
+                <!-- Dynamic student list cards inserted here -->
+            </div>
+
+            <!-- Touch select status toast/indicator -->
+            <div id="touchSelectStatus" class="hidden p-3 bg-blue-50 border-t border-blue-100 text-blue-800 text-xs flex justify-between items-center">
+                <span><i class="fa-solid fa-hand-pointer mr-1"></i> 已選取: <strong id="selectedStudentName">--</strong></span>
+                <button onclick="cancelTouchSelection()" class="text-blue-600 hover:text-blue-900 font-bold">取消</button>
+            </div>
+        </aside>
+
+        <!-- Classroom Area -->
+        <main id="mainContent" class="flex-1 flex flex-col gap-4 overflow-x-auto relative">
+            
+            <div id="seatingContainer" class="mmlc-container bg-white p-5 md:p-7 rounded-xl shadow-sm border border-slate-200 flex-1 flex flex-col justify-between min-w-[860px]">
+                
+                <!-- Class Header & Teacher Desk Row -->
+                <div class="w-full flex justify-between items-center mb-8">
+                    <div class="border border-slate-300 bg-white text-slate-700 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm flex items-center gap-2 group">
+                        <i class="fa-solid fa-chalkboard-user text-slate-400"></i>
+                        <span id="teacherDeskDisplay" class="font-medium">Teacher Desk</span>
+                        <button onclick="openEditDeskModal()" class="no-print text-slate-400 hover:text-blue-600 text-xs p-1" title="修改講台內容">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
+                    </div>
+
+                    <!-- Editable Class Name -->
+                    <div class="flex items-center gap-2">
+                        <h2 id="classNameDisplay" class="text-4xl font-black text-slate-900 tracking-wider font-mono">3A</h2>
+                        <button onclick="openEditClassModal()" class="no-print text-slate-400 hover:text-blue-600 text-xs p-1" title="修改班別名稱">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
+                    </div>
+
+                    <div class="w-40 text-right no-print text-xs text-slate-400">
+                        MMLC Room Layout
+                    </div>
+                </div>
+
+                <!-- MMLC 6 Pods Seating Layout Grid -->
+                <div id="mmlcSeatingGrid" class="flex flex-col gap-3 my-auto w-full">
+                    <!-- Dynamic MMLC Pod Rows will be rendered here -->
+                </div>
+
+                <!-- Student count (bottom left) -->
+                <div id="studentCountBar" class="w-full flex justify-start items-center mt-4 pt-3 border-t border-slate-200">
+                    <div class="text-sm text-slate-600 font-semibold">
+                        學生人數：<span id="studentCountDisplay" class="text-slate-900 font-bold">0</span> 人
+                        <span class="text-slate-400 font-normal mx-1.5">·</span>
+                        已入座：<span id="seatedCountDisplay" class="text-slate-900 font-bold">0</span> 人
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toastNotification" class="fixed bottom-5 right-5 bg-slate-900 text-white text-xs px-4 py-2.5 rounded-lg shadow-lg hidden z-50 flex items-center gap-2 transition-all">
+        <i class="fa-solid fa-circle-info text-blue-400" id="toastIcon"></i>
+        <span id="toastMessage">訊息通知</span>
+    </div>
+
+    <!-- Edit Teacher Desk Modal -->
+    <div id="editDeskModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6 m-4 relative">
+            <h3 class="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
+                <i class="fa-solid fa-chalkboard-user text-blue-600"></i> 修改講台名稱
+            </h3>
+            <input type="text" id="deskInput" placeholder="講台名稱/備註 (例如: Teacher Desk / 王老師)" class="w-full p-2.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none mb-4">
+            <div class="flex justify-end gap-2">
+                <button onclick="closeModal('editDeskModal')" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg">取消</button>
+                <button onclick="saveTeacherDesk()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg">儲存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Class Name Modal -->
+    <div id="editClassModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6 m-4 relative">
+            <h3 class="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
+                <i class="fa-solid fa-pen-to-square text-blue-600"></i> 修改班別名稱
+            </h3>
+            <input type="text" id="classInput" placeholder="班別名稱 (例如: 3A, 4B)" class="w-full p-2.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none mb-4">
+            <div class="flex justify-end gap-2">
+                <button onclick="closeModal('editClassModal')" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg">取消</button>
+                <button onclick="saveClassName()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg">儲存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Single Student Modal -->
+    <div id="addStudentModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6 m-4 relative">
+            <h3 class="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <i class="fa-solid fa-user-plus text-blue-600"></i> 新增單個學生
+            </h3>
+            <div class="space-y-3 mb-5">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">班別</label>
+                    <input type="text" id="addStudentClass" placeholder="3A" class="w-full p-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">班號</label>
+                    <input type="text" id="addStudentNo" placeholder="32" class="w-full p-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">中文姓名 *</label>
+                    <input type="text" id="addStudentName" placeholder="陳大文" class="w-full p-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">英文姓名 (可選)</label>
+                    <input type="text" id="addStudentEnName" placeholder="CHAN Tai Man" class="w-full p-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2">
+                <button onclick="closeModal('addStudentModal')" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg">取消</button>
+                <button onclick="saveSingleStudent()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg">新增學生</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Clear Modal -->
+    <div id="clearConfirmModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 m-4 text-center">
+            <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 class="text-base font-bold text-slate-800 mb-1">確定要清空所有座位嗎？</h3>
+            <p class="text-xs text-slate-500 mb-5">所有學生將退回未分配列表中，此操作無法復原。</p>
+            <div class="flex justify-center gap-2">
+                <button onclick="closeModal('clearConfirmModal')" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg">取消</button>
+                <button onclick="confirmClearAllSeats()" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-lg">確認清空</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div id="uploadModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 m-4 relative animate-in fade-in zoom-in duration-150">
+            <button onclick="closeUploadModal()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-lg">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <h3 class="text-lg font-bold text-slate-800 mb-1 flex items-center gap-2">
+                <i class="fa-solid fa-file-csv text-blue-600"></i> 匯入學生名單
+            </h3>
+            <p class="text-xs text-slate-500 mb-4">支援格式：<code class="bg-slate-100 px-1 py-0.5 rounded text-blue-600">班別 + 班號 + 姓名 + 英文名(可選)</code> (例如: <span class="font-mono">3A 01 鄭淑恩 CHENG Shuk Yan</span>)</p>
+
+            <!-- Tabs -->
+            <div class="flex border-b border-slate-200 mb-4">
+                <button id="tabTextBtn" onclick="switchUploadTab('text')" class="py-2 px-4 text-sm font-semibold text-blue-600 border-b-2 border-blue-600">快速文字貼上</button>
+                <button id="tabCsvBtn" onclick="switchUploadTab('csv')" class="py-2 px-4 text-sm font-semibold text-slate-500 border-b-2 border-transparent">CSV 檔案上載</button>
+            </div>
+
+            <!-- Text Tab Content -->
+            <div id="tabText" class="space-y-3">
+                <label class="block text-xs font-semibold text-slate-600">請貼上學生名單 (每行一位)：</label>
+                <textarea id="textImportArea" rows="8" placeholder="3A 01 鄭淑恩 CHENG Shuk Yan&#10;3A 02 周芷萱 CHOW Tsz Hin&#10;3A 03 蕭穎鴻 SIU Wing Hung" class="w-full p-3 text-xs font-mono border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none leading-relaxed"></textarea>
+                <button onclick="handleTextImport()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg text-sm transition shadow">
+                    確定匯入名單
+                </button>
+            </div>
+
+            <!-- CSV Tab Content -->
+            <div id="tabCsv" class="space-y-4 hidden">
+                <div class="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-6 text-center bg-slate-50/50 cursor-pointer transition" onclick="document.getElementById('csvFileInput').click()">
+                    <i class="fa-solid fa-cloud-arrow-up text-3xl text-blue-500 mb-2"></i>
+                    <p class="text-sm font-medium text-slate-700">點擊選擇檔案 或 將 CSV 拖放至此</p>
+                    <p class="text-xs text-slate-400 mt-1">欄位格式範例: <code class="bg-slate-200 px-1 text-slate-700">班別, 班號, 姓名, 英文名</code></p>
+                    <input type="file" id="csvFileInput" accept=".csv" class="hidden" onchange="handleCSVFileSelect(event)">
+                </div>
+            </div>
+
+            <div class="mt-6 flex justify-between items-center pt-4 border-t border-slate-100">
+                <button onclick="loadMmlcDemoData()" class="text-xs text-blue-600 hover:underline font-medium flex items-center gap-1">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 載入 3A 示範資料
+                </button>
+                <button onclick="closeUploadModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg">
+                    取消
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- MMLC Pod Layout Structure Configuration ---
+        // 3 Rows, each row contains 2 Pods (Total 6 Pods, 36 Seat Slots)
+        const MMLC_LAYOUT_SEATS = [
+            // Row 1 (Pods 1 & 2)
+            {
+                rowId: 1,
+                podLeftNum: 1,
+                podRightNum: 2,
+                outerLeft: ['s_1_ol1', 's_1_ol2'],
+                raisedLeft: ['s_1_rl1', 's_1_rl2'],
+                center: ['s_1_c1', 's_1_c2', 's_1_c3', 's_1_c4'],
+                raisedRight: ['s_1_rr1', 's_1_rr2'],
+                outerRight: ['s_1_or1', 's_1_or2']
+            },
+            // Row 2 (Pods 3 & 4)
+            {
+                rowId: 2,
+                podLeftNum: 3,
+                podRightNum: 4,
+                outerLeft: ['s_2_ol1', 's_2_ol2'],
+                raisedLeft: ['s_2_rl1', 's_2_rl2'],
+                center: ['s_2_c1', 's_2_c2', 's_2_c3', 's_2_c4'],
+                raisedRight: ['s_2_rr1', 's_2_rr2'],
+                outerRight: ['s_2_or1', 's_2_or2']
+            },
+            // Row 3 (Pods 5 & 6)
+            {
+                rowId: 3,
+                podLeftNum: 5,
+                podRightNum: 6,
+                outerLeft: ['s_3_ol1', 's_3_ol2'],
+                raisedLeft: ['s_3_rl1', 's_3_rl2'],
+                center: ['s_3_c1', 's_3_c2', 's_3_c3', 's_3_c4'],
+                raisedRight: ['s_3_rr1', 's_3_rr2'],
+                outerRight: ['s_3_or1', 's_3_or2']
+            }
+        ];
+
+        // All 36 seat IDs in ordered array
+        const ALL_SEAT_IDS = MMLC_LAYOUT_SEATS.flatMap(row => [
+            ...row.outerLeft, ...row.raisedLeft, ...row.center, ...row.raisedRight, ...row.outerRight
+        ]);
+
+        // State variables
+        let className = "3A";
+        let teacherDeskText = "Teacher Desk";
+        let students = [];           // Student objects: { id, className, number, name, enName }
+        let seats = {};              // Mapping seatId -> studentId
+        let draggedStudentId = null;
+        let dragSourceSeatId = null;
+        let selectedTouchStudentId = null;
+
+        window.onload = function() {
+            loadSavedState();
+            if (students.length === 0) {
+                loadMmlcDemoData();
+            } else {
+                renderMmlcGrid();
+                renderUnassignedList();
+            }
+        };
+
+        function saveState() {
+            const data = {
+                className,
+                teacherDeskText,
+                students,
+                seats
+            };
+            localStorage.setItem('mmlc_seating_plan_data', JSON.stringify(data));
+        }
+
+        function loadSavedState() {
+            const saved = localStorage.getItem('mmlc_seating_plan_data');
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    className = parsed.className || "3A";
+                    teacherDeskText = parsed.teacherDeskText || "Teacher Desk";
+                    students = parsed.students || [];
+                    seats = parsed.seats || {};
+                    document.getElementById('classNameDisplay').textContent = className;
+                    document.getElementById('teacherDeskDisplay').textContent = teacherDeskText;
+                } catch (e) {
+                    console.error('Error loading saved state:', e);
+                }
+            }
+        }
+
+        function showToast(msg, iconClass = "fa-circle-info text-blue-400") {
+            const toast = document.getElementById('toastNotification');
+            const toastMsg = document.getElementById('toastMessage');
+            const toastIcon = document.getElementById('toastIcon');
+            
+            toastMsg.textContent = msg;
+            toastIcon.className = `fa-solid ${iconClass}`;
+            toast.classList.remove('hidden');
+            
+            setTimeout(() => {
+                toast.classList.add('hidden');
+            }, 3000);
+        }
+
+        function openModal(modalId) {
+            document.getElementById(modalId).classList.remove('hidden');
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.add('hidden');
+        }
+
+        function openEditDeskModal() {
+            document.getElementById('deskInput').value = teacherDeskText;
+            openModal('editDeskModal');
+        }
+
+        function saveTeacherDesk() {
+            const input = document.getElementById('deskInput').value.trim();
+            if (input) {
+                teacherDeskText = input;
+                document.getElementById('teacherDeskDisplay').textContent = teacherDeskText;
+                saveState();
+                closeModal('editDeskModal');
+                showToast("已更新講台名稱", "fa-check text-emerald-400");
+            }
+        }
+
+        function openEditClassModal() {
+            document.getElementById('classInput').value = className;
+            openModal('editClassModal');
+        }
+
+        function saveClassName() {
+            const input = document.getElementById('classInput').value.trim();
+            if (input) {
+                className = input;
+                document.getElementById('classNameDisplay').textContent = className;
+                saveState();
+                closeModal('editClassModal');
+                showToast("已更新班別名稱", "fa-check text-emerald-400");
+            }
+        }
+
+        function openAddStudentModal() {
+            document.getElementById('addStudentClass').value = className;
+            document.getElementById('addStudentNo').value = String(students.length + 1);
+            document.getElementById('addStudentName').value = "";
+            document.getElementById('addStudentEnName').value = "";
+            openModal('addStudentModal');
+        }
+
+        function saveSingleStudent() {
+            const stdClass = document.getElementById('addStudentClass').value.trim() || className;
+            const stdNo = document.getElementById('addStudentNo').value.trim() || String(students.length + 1);
+            const stdName = document.getElementById('addStudentName').value.trim();
+            const stdEnName = document.getElementById('addStudentEnName').value.trim();
+
+            if (!stdName) {
+                showToast("請輸入中文姓名", "fa-circle-exclamation text-amber-400");
+                return;
+            }
+
+            const newStd = {
+                id: 'std_' + Date.now(),
+                className: stdClass,
+                number: stdNo,
+                name: stdName,
+                enName: stdEnName
+            };
+
+            students.push(newStd);
+            saveState();
+            renderUnassignedList();
+            closeModal('addStudentModal');
+            showToast(`已新增學生: ${stdName}`, "fa-check text-emerald-400");
+        }
+
+        function openClearConfirmModal() {
+            openModal('clearConfirmModal');
+        }
+
+        function confirmClearAllSeats() {
+            seats = {};
+            saveState();
+            renderMmlcGrid();
+            renderUnassignedList();
+            closeModal('clearConfirmModal');
+            showToast("已清空所有座位", "fa-trash-can text-amber-400");
+        }
+
+        // Sidebar Toggle Logic
+        let isSidebarVisible = true;
+        function toggleSidebar(forceState = null) {
+            const sidebar = document.getElementById('sidebar');
+            const toggleBtn = document.getElementById('sidebarToggleBtn');
+            
+            if (forceState !== null) {
+                isSidebarVisible = forceState;
+            } else {
+                isSidebarVisible = !isSidebarVisible;
+            }
+            
+            if (isSidebarVisible) {
+                sidebar.classList.remove('hidden');
+                sidebar.classList.add('flex');
+                toggleBtn.innerHTML = '<i class="fa-solid fa-eye-slash"></i> 隱藏側欄';
+            } else {
+                sidebar.classList.add('hidden');
+                sidebar.classList.remove('flex');
+                toggleBtn.innerHTML = '<i class="fa-solid fa-eye"></i> 顯示側欄';
+            }
+        }
+
+        // ---- Export uses an isolated A4 print snapshot (same look as 列印) ----
+        const A4_LANDSCAPE_PX = { w: 1123, h: 794 }; // 297mm × 210mm @ 96dpi
+        const A4_CONTENT_PX = { w: 1077, h: 748 };   // ~6mm margins
+
+        function getPrintExportCss() {
+            return `
+                * { box-sizing: border-box; }
+                html, body {
+                    margin: 0; padding: 0;
+                    background: #fff; color: #000;
+                    font-family: Inter, system-ui, -apple-system, sans-serif;
+                    -webkit-print-color-adjust: exact;
+                    print-color-adjust: exact;
+                }
+                body {
+                    width: ${A4_CONTENT_PX.w}px;
+                    padding: 0;
+                }
+                .no-print { display: none !important; }
+                #seatingContainer, .mmlc-container {
+                    width: ${A4_CONTENT_PX.w}px !important;
+                    max-width: ${A4_CONTENT_PX.w}px !important;
+                    min-width: 0 !important;
+                    margin: 0 !important;
+                    padding: 8px !important;
+                    background: #fff !important;
+                    border: none !important;
+                    border-radius: 0 !important;
+                    box-shadow: none !important;
+                    display: block !important;
+                }
+                #seatingContainer > .w-full.flex { margin-bottom: 8px !important; }
+                #seatingContainer > .w-full.flex.justify-between,
+                #seatingContainer > div:first-child {
+                    display: flex !important;
+                    justify-content: space-between !important;
+                    align-items: center !important;
+                    width: 100% !important;
+                    margin-bottom: 8px !important;
+                }
+                #teacherDeskDisplay, #seatingContainer .border.border-slate-300 {
+                    border: 1px solid #cbd5e1 !important;
+                    background: #fff !important;
+                    color: #334155 !important;
+                    padding: 6px 10px !important;
+                    border-radius: 8px !important;
+                    font-size: 12px !important;
+                    font-weight: 600 !important;
+                    display: inline-flex !important;
+                    align-items: center !important;
+                    gap: 6px !important;
+                }
+                #classNameDisplay { font-size: 22px !important; font-weight: 900 !important; color: #0f172a !important; letter-spacing: 0.04em !important; }
+                #mmlcSeatingGrid {
+                    display: flex !important;
+                    flex-direction: column !important;
+                    gap: 10px !important;
+                    width: 100% !important;
+                    margin: 0 !important;
+                    max-width: none !important;
+                }
+                .pod-row {
+                    display: flex !important;
+                    justify-content: space-between !important;
+                    align-items: stretch !important;
+                    gap: 10px !important;
+                    margin: 0 !important;
+                    width: 100% !important;
+                }
+                .pod-group {
+                    flex: 1 1 0 !important;
+                    min-width: 0 !important;
+                    max-width: none !important;
+                    padding: 6px !important;
+                    border: 2px solid var(--pod-border, #93c5fd) !important;
+                    background: var(--pod-bg, #f8fbff) !important;
+                    border-radius: 6px !important;
+                    display: flex !important;
+                    flex-direction: column !important;
+                }
+                .pod-group[data-pod="1"] { --pod-border:#3b82f6; --pod-bg:#eff6ff; --pod-label:#1d4ed8; }
+                .pod-group[data-pod="2"] { --pod-border:#0891b2; --pod-bg:#ecfeff; --pod-label:#0e7490; }
+                .pod-group[data-pod="3"] { --pod-border:#6366f1; --pod-bg:#eef2ff; --pod-label:#4338ca; }
+                .pod-group[data-pod="4"] { --pod-border:#0d9488; --pod-bg:#f0fdfa; --pod-label:#0f766e; }
+                .pod-group[data-pod="5"] { --pod-border:#8b5cf6; --pod-bg:#f5f3ff; --pod-label:#6d28d9; }
+                .pod-group[data-pod="6"] { --pod-border:#64748b; --pod-bg:#f8fafc; --pod-label:#334155; }
+                .pod-group-header {
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    gap: 6px !important;
+                    margin-bottom: 5px !important;
+                    padding-bottom: 4px !important;
+                    border-bottom: 1.5px dashed var(--pod-border) !important;
+                }
+                .pod-group-title {
+                    font-size: 13px !important;
+                    font-weight: 800 !important;
+                    color: var(--pod-label) !important;
+                }
+                .pod-group-body {
+                    display: grid !important;
+                    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+                    grid-auto-rows: minmax(64px, auto) !important;
+                    gap: 6px !important;
+                    width: 100% !important;
+                }
+                .hexagon-badge {
+                    position: relative !important;
+                    width: 28px !important;
+                    height: 31px !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    color: var(--pod-border, #3b82f6) !important;
+                    flex-shrink: 0 !important;
+                }
+                .hexagon-badge svg { position:absolute; inset:0; width:100%; height:100%; }
+                .hexagon-badge span {
+                    position: relative; z-index: 1;
+                    font-size: 13px !important; font-weight: 800 !important;
+                    color: var(--pod-label, #1d4ed8) !important; line-height: 1 !important;
+                }
+                .mmlc-card, .seat-empty {
+                    width: 100% !important;
+                    min-height: 64px !important;
+                    height: auto !important;
+                    padding: 5px 4px !important;
+                    border-radius: 4px !important;
+                    box-shadow: none !important;
+                    border: 1px solid #1e293b !important;
+                    background: #fff !important;
+                    overflow: visible !important;
+                    display: flex !important;
+                    flex-direction: column !important;
+                    justify-content: center !important;
+                    align-items: center !important;
+                    gap: 2px !important;
+                }
+                .seat-empty {
+                    border-style: dashed !important;
+                    border-color: #64748b !important;
+                    background: #f8fafc !important;
+                }
+                .seat-class-no {
+                    font-size: 10px !important; color: #334155 !important;
+                    font-weight: 600 !important; line-height: 1.15 !important; margin: 0 !important;
+                }
+                .seat-name-zh {
+                    font-size: 13px !important; font-weight: 700 !important; color: #000 !important;
+                    line-height: 1.2 !important; width: 100% !important; text-align: center !important;
+                    white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; margin: 0 !important;
+                }
+                .seat-name-en {
+                    font-size: 9px !important; color: #1e293b !important;
+                    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+                    line-height: 1.15 !important; width: 100% !important; text-align: center !important;
+                    white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; margin: 0 !important;
+                }
+                #studentCountBar {
+                    margin-top: 10px !important;
+                    padding-top: 8px !important;
+                    border-top: 1px solid #e2e8f0 !important;
+                    font-size: 12px !important;
+                    color: #475569 !important;
+                    font-weight: 600 !important;
+                }
+                #studentCountDisplay, #seatedCountDisplay { color: #0f172a !important; font-weight: 800 !important; }
+            `;
+        }
+
+        async function captureAsPrintVersion() {
+            const source = document.getElementById('seatingContainer');
+            if (!source) throw new Error('找不到座位表');
+
+            const iframe = document.createElement('iframe');
+            iframe.setAttribute('aria-hidden', 'true');
+            iframe.style.cssText = `position:fixed;left:-12000px;top:0;width:${A4_CONTENT_PX.w}px;height:${A4_LANDSCAPE_PX.h}px;border:0;opacity:0;pointer-events:none;background:#fff;`;
+            document.body.appendChild(iframe);
+
+            const doc = iframe.contentDocument;
+            doc.open();
+            doc.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+                <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+                <style>${getPrintExportCss()}</style>
+            </head><body></body></html>`);
+            doc.close();
+
+            const clone = source.cloneNode(true);
+            clone.querySelectorAll('.no-print').forEach(el => el.remove());
+            clone.removeAttribute('style');
+            doc.body.innerHTML = clone.outerHTML;
+            const mounted = doc.getElementById('seatingContainer');
+            if (mounted) {
+                mounted.style.width = A4_CONTENT_PX.w + 'px';
+                mounted.style.maxWidth = A4_CONTENT_PX.w + 'px';
+                mounted.style.minWidth = '0';
+                mounted.style.margin = '0';
+                mounted.style.background = '#fff';
+            }
+
+            if (doc.fonts && doc.fonts.ready) {
+                try { await doc.fonts.ready; } catch (e) {}
+            }
+            await new Promise(r => setTimeout(r, 120));
+
+            const target = doc.getElementById('seatingContainer') || doc.body;
+            const canvas = await html2canvas(target, {
+                scale: 2,
+                useCORS: true,
+                logging: false,
+                backgroundColor: '#ffffff',
+                width: A4_CONTENT_PX.w,
+                windowWidth: A4_CONTENT_PX.w,
+                scrollX: 0,
+                scrollY: 0
+            });
+
+            iframe.remove();
+            return canvas;
+        }
+
+        // Fit seating plan onto one A4 landscape page when printing
+        function fitSeatingPlanForPrint() {
+            document.body.classList.add('is-print-layout');
+            const el = document.getElementById('seatingContainer');
+            if (!el) return;
+
+            el.style.zoom = '';
+            el.style.transform = '';
+
+            void el.offsetHeight;
+            const pageW = A4_CONTENT_PX.w;
+            const pageH = A4_CONTENT_PX.h;
+            const scale = Math.min(pageW / el.scrollWidth, pageH / el.scrollHeight, 1);
+
+            if (scale < 0.995) {
+                el.style.zoom = String(Math.max(scale * 0.98, 0.72));
+            }
+        }
+
+        function resetSeatingPlanAfterPrint() {
+            document.body.classList.remove('is-print-layout');
+            const el = document.getElementById('seatingContainer');
+            if (!el) return;
+            el.style.zoom = '';
+            el.style.transform = '';
+        }
+
+        async function printSeatingPlan() {
+            try {
+                const win = await openPrintReadyWindow();
+                await new Promise(r => setTimeout(r, 350));
+                win.focus();
+                win.print();
+            } catch (err) {
+                // Fallback: in-page print
+                console.warn(err);
+                fitSeatingPlanForPrint();
+                window.print();
+            }
+        }
+
+        window.addEventListener('beforeprint', () => {
+            if (!document.body.classList.contains('is-print-layout')) {
+                fitSeatingPlanForPrint();
+            }
+        });
+        window.addEventListener('afterprint', resetSeatingPlanAfterPrint);
+
+        function createHexBadge(num) {
+            return `
+                <div class="hexagon-badge" aria-label="Pod ${num}">
+                    <svg viewBox="0 0 100 110" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <polygon points="50,3 97,28 97,82 50,107 3,82 3,28"
+                                 fill="#ffffff" stroke="currentColor" stroke-width="5"
+                                 stroke-linejoin="round"/>
+                    </svg>
+                    <span>${num}</span>
+                </div>
+            `;
+        }
+
+        function createPodGroup(podNum, side, outerIds, raisedIds, innerIds) {
+            // Same 3×2 order for every pod so PDF/PNG look unified
+            const seatIds = [
+                outerIds[0], raisedIds[0], raisedIds[1],
+                outerIds[1], innerIds[0], innerIds[1]
+            ];
+
+            return `
+                <section class="pod-group" data-pod="${podNum}" aria-label="Pod ${podNum}">
+                    <div class="pod-group-header">
+                        ${createHexBadge(podNum)}
+                        <div class="pod-group-title">Pod ${podNum}</div>
+                    </div>
+                    <div class="pod-group-body">
+                        ${seatIds.map(id => createMmlcSeat(id)).join('')}
+                    </div>
+                </section>
+            `;
+        }
+
+        function renderMmlcGrid() {
+            const grid = document.getElementById('mmlcSeatingGrid');
+            if (!grid) return;
+            let html = '';
+
+            MMLC_LAYOUT_SEATS.forEach(row => {
+                // Each pod = 6 seats: outer(2) + raised(2) + inner half of center(2)
+                // Center split by column: left pod gets c0,c2 ; right pod gets c1,c3
+                html += `
+                    <div class="pod-row">
+                        ${createPodGroup(
+                            row.podLeftNum,
+                            'left',
+                            row.outerLeft,
+                            row.raisedLeft,
+                            [row.center[0], row.center[2]]
+                        )}
+                        ${createPodGroup(
+                            row.podRightNum,
+                            'right',
+                            row.outerRight,
+                            row.raisedRight,
+                            [row.center[1], row.center[3]]
+                        )}
+                    </div>
+                `;
+            });
+
+            grid.innerHTML = html;
+        }
+
+        async function openPrintReadyWindow() {
+            const source = document.getElementById('seatingContainer');
+            if (!source) throw new Error('找不到座位表');
+
+            const clone = source.cloneNode(true);
+            clone.querySelectorAll('.no-print').forEach(el => el.remove());
+            clone.removeAttribute('style');
+
+            const html = `<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8">
+<title>MMLC_Seating_Plan_${className}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<style>
+${getPrintExportCss()}
+@media print {
+  @page { size: A4 landscape; margin: 6mm; }
+  html, body { width: auto !important; }
+  #seatingContainer, .mmlc-container {
+    width: 285mm !important;
+    max-width: 285mm !important;
+  }
+}
+</style>
+</head>
+<body>${clone.outerHTML}</body>
+</html>`;
+
+            const win = window.open('', '_blank');
+            if (!win) throw new Error('瀏覽器攔截咗彈出視窗，請允許彈出後再試');
+            win.document.open();
+            win.document.write(html);
+            win.document.close();
+            return win;
+        }
+
+        async function exportToPDF() {
+            const pdfBtn = document.getElementById('pdfBtn');
+            const originalText = pdfBtn.innerHTML;
+            pdfBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 產生中...`;
+            pdfBtn.disabled = true;
+
+            try {
+                // Use the browser print engine (same as 列印) → Save as PDF
+                const win = await openPrintReadyWindow();
+                await new Promise(r => setTimeout(r, 350));
+                win.focus();
+                win.print();
+                showToast("請喺列印對話框選擇「另存為 PDF」／Microsoft Print to PDF", "fa-file-pdf text-red-400");
+            } catch (err) {
+                console.error(err);
+                showToast("匯出 PDF 時發生錯誤: " + err.message, "fa-circle-xmark text-red-400");
+            } finally {
+                pdfBtn.innerHTML = originalText;
+                pdfBtn.disabled = false;
+            }
+        }
+
+        async function exportToImage() {
+            const imgBtn = document.getElementById('imgBtn');
+            const originalText = imgBtn.innerHTML;
+            imgBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 產生中...`;
+            imgBtn.disabled = true;
+
+            try {
+                const canvas = await captureAsPrintVersion();
+                const link = document.createElement('a');
+                link.download = `MMLC_Seating_Plan_${className}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+                
+                showToast("圖片下載成功！", "fa-circle-check text-emerald-400");
+            } catch (err) {
+                console.error(err);
+                showToast("匯出圖片時發生錯誤: " + err.message, "fa-circle-xmark text-red-400");
+            } finally {
+                imgBtn.innerHTML = originalText;
+                imgBtn.disabled = false;
+            }
+        }
+
+        function loadMmlcDemoData() {
+            className = "3A";
+            teacherDeskText = "Teacher Desk";
+            document.getElementById('classNameDisplay').textContent = className;
+            document.getElementById('teacherDeskDisplay').textContent = teacherDeskText;
+
+            const demoList = [
+                { class: "3A", no: "1", name: "鄭淑恩", enName: "CHENG Shuk Yan" },
+                { class: "3A", no: "2", name: "周芷萱", enName: "CHOW Tsz Hin" },
+                { class: "3A", no: "3", name: "蕭穎鴻", enName: "SIU Wing Hung" },
+                { class: "3A", no: "4", name: "焦一格", enName: "CHIU Yat Kak" },
+                { class: "3A", no: "5", name: "劉嚮甄", enName: "LAU Cheung Yan" },
+                { class: "3A", no: "6", name: "劉雪盈", enName: "LAU Suet Ying" },
+                { class: "3A", no: "7", name: "林菀之", enName: "LAM Yuen Chi" },
+                { class: "3A", no: "8", name: "盧琛悅", enName: "LO Sum Yuet" },
+                { class: "3A", no: "9", name: "潘穎霖", enName: "PUN Wing Lam" },
+                { class: "3A", no: "10", name: "王靜晞", enName: "WONG Ching Hei" },
+                { class: "3A", no: "11", name: "黃蘊蕎", enName: "WONG Wan Kiu" },
+                { class: "3A", no: "12", name: "鄭穎謙", enName: "CHENG Wing Him" },
+                { class: "3A", no: "13", name: "張瑾郎", enName: "CHEUNG Kan Long" },
+                { class: "3A", no: "14", name: "霍梓堯", enName: "FOK Tsz Yiu" },
+                { class: "3A", no: "15", name: "馮曉楠", enName: "FUNG Hiu Nam" },
+                { class: "3A", no: "16", name: "何璟熙", enName: "HO King Hei" },
+                { class: "3A", no: "17", name: "何峻曦", enName: "HO Chun Hei" },
+                { class: "3A", no: "18", name: "許皓翔", enName: "HUI Ho Cheong" },
+                { class: "3A", no: "19", name: "洪以恆", enName: "HUNG Yi Hang" },
+                { class: "3A", no: "20", name: "鄺紓羽", enName: "KWONG Sue Yu" },
+                { class: "3A", no: "21", name: "劉家謙", enName: "LAU Ka Him" },
+                { class: "3A", no: "22", name: "洗俊煒", enName: "SIN Chun Wai" },
+                { class: "3A", no: "23", name: "譚卓然", enName: "TAM Cheuk Yin" },
+                { class: "3A", no: "24", name: "徐敬謙", enName: "TSUI King Him" },
+                { class: "3A", no: "25", name: "黃康誠", enName: "WONG Hong Shing" },
+                { class: "3A", no: "26", name: "黃善恆", enName: "WONG Sin Hang" },
+                { class: "3A", no: "27", name: "胡樂晞", enName: "WU Lok Hei" },
+                { class: "3A", no: "28", name: "楊子揚", enName: "YEUNG Tsz Yeung" },
+                { class: "3A", no: "29", name: "翁彥朗", enName: "YUNG Yin Long" },
+                { class: "3A", no: "30", name: "張浩宇", enName: "CHEUNG Ho Yu" },
+                { class: "3A", no: "31", name: "趙子豪", enName: "CHIU Tsz Ho" }
+            ];
+
+            students = demoList.map(s => ({
+                id: 'std_' + s.no,
+                className: s.class,
+                number: s.no,
+                name: s.name,
+                enName: s.enName || ''
+            }));
+
+            seats = {
+                's_1_ol1': 'std_6',  's_1_ol2': 'std_12', 's_1_rl1': 'std_8',  's_1_rl2': 'std_5',
+                's_1_c1':  'std_29', 's_1_c2':  'std_11', 's_1_c3':  'std_9',  's_1_c4':  'std_7',
+                's_1_rr1': 'std_31', 's_1_rr2': null,     's_1_or1': 'std_24', 's_1_or2': 'std_22',
+
+                's_2_ol1': 'std_4',  's_2_ol2': 'std_21', 's_2_rl1': 'std_10', 's_2_rl2': null,
+                's_2_c1':  'std_26', 's_2_c2':  'std_25', 's_2_c3':  'std_13', 's_2_c4':  'std_27',
+                's_2_rr1': 'std_17', 's_2_rr2': null,     's_2_or1': 'std_28', 's_2_or2': 'std_14',
+
+                's_3_ol1': 'std_20', 's_3_ol2': 'std_19', 's_3_rl1': 'std_16', 's_3_rl2': null,
+                's_3_c1':  'std_2',  's_3_c2':  'std_15', 's_3_c3':  'std_3',  's_3_c4':  'std_30',
+                's_3_rr1': 'std_18', 's_3_rr2': null,     's_3_or1': 'std_1',  's_3_or2': 'std_23'
+            };
+
+            saveState();
+            renderMmlcGrid();
+            renderUnassignedList();
+            closeUploadModal();
+            showToast("已載入 3A 示範佈局", "fa-wand-magic-sparkles text-indigo-400");
+            toggleSidebar(false); // Auto hide sidebar after demo load for clean view
+        }
+
+        function createMmlcSeat(seatId) {
+            const studentId = seats[seatId];
+            const student = students.find(s => s.id === studentId);
+            const isSelected = selectedTouchStudentId === studentId;
+
+            if (student) {
+                return `
+                    <div id="seat-${seatId}"
+                         class="mmlc-card rounded-xl cursor-move shadow-sm ${isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : 'bg-white'}"
+                         draggable="true"
+                         ondragstart="handleDragStart(event, '${student.id}', '${seatId}')"
+                         ondragover="handleDragOver(event)"
+                         ondragleave="handleDragLeave(event)"
+                         ondrop="handleDropToSeat(event, '${seatId}')"
+                         onclick="handleTouchSelect('${student.id}', '${seatId}')">
+                        <div class="seat-class-no">${student.className} ${student.number}</div>
+                        <div class="seat-name-zh" title="${escapeHtml(student.name)}">${escapeHtml(student.name)}</div>
+                        ${student.enName ? `<div class="seat-name-en" title="${escapeHtml(student.enName)}">${escapeHtml(student.enName)}</div>` : ''}
+                    </div>
+                `;
+            } else {
+                return `
+                    <div id="seat-${seatId}"
+                         class="seat-empty hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer"
+                         ondragover="handleDragOver(event)"
+                         ondragleave="handleDragLeave(event)"
+                         ondrop="handleDropToSeat(event, '${seatId}')"
+                         onclick="handleTouchDrop('${seatId}')">
+                        <div class="text-sm text-slate-400 font-medium">+</div>
+                    </div>
+                `;
+            }
+        }
+
+        function updateStudentCountFooter() {
+            const totalEl = document.getElementById('studentCountDisplay');
+            const seatedEl = document.getElementById('seatedCountDisplay');
+            if (!totalEl || !seatedEl) return;
+
+            const seated = Object.values(seats).filter(id => id !== null && id !== undefined).length;
+            totalEl.textContent = String(students.length);
+            seatedEl.textContent = String(seated);
+        }
+
+        function renderUnassignedList() {
+            const list = document.getElementById('unassignedList');
+            const count = document.getElementById('unassignedCount');
+            if (!list) return;
+            const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
+
+            const assignedStudentIds = Object.values(seats).filter(id => id !== null);
+            let unassigned = students.filter(s => !assignedStudentIds.includes(s.id));
+
+            if (searchTerm) {
+                unassigned = unassigned.filter(s =>
+                    s.name.toLowerCase().includes(searchTerm) ||
+                    s.number.includes(searchTerm) ||
+                    (s.enName && s.enName.toLowerCase().includes(searchTerm))
+                );
+            }
+
+            count.textContent = `共 ${unassigned.length} 人`;
+            updateStudentCountFooter();
+
+            if (unassigned.length === 0) {
+                list.innerHTML = `<div class="text-center text-slate-400 text-xs py-8 bg-slate-50 rounded-lg border border-slate-100">所有學生已分配座位，或無相符結果</div>`;
+                return;
+            }
+
+            list.innerHTML = unassigned.map(student => {
+                const isSelected = selectedTouchStudentId === student.id;
+                return `
+                <div class="bg-white border border-slate-200 rounded-lg p-2.5 flex justify-between items-center cursor-move hover:border-blue-400 shadow-sm transition-all ${isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : ''}"
+                     draggable="true"
+                     ondragstart="handleDragStart(event, '${student.id}', null)"
+                     onclick="handleTouchSelect('${student.id}', null)">
+                    <div>
+                        <div class="text-xs font-bold text-slate-800">${escapeHtml(student.name)}</div>
+                        ${student.enName ? `<div class="text-[10px] text-slate-500 font-mono mt-0.5">${escapeHtml(student.enName)}</div>` : ''}
+                    </div>
+                    <div class="bg-slate-100 text-slate-600 text-[10px] px-2 py-1 rounded font-mono font-bold">
+                        ${student.className} ${student.number}
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        function handleDragStart(e, studentId, sourceSeatId) {
+            draggedStudentId = studentId;
+            dragSourceSeatId = sourceSeatId;
+            e.dataTransfer.effectAllowed = 'move';
+            setTimeout(() => e.target.classList.add('dragging'), 0);
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const dropzone = e.target.closest('.mmlc-card, .border-dashed, #unassignedList');
+            if (dropzone && dropzone.id !== 'unassignedList') {
+                dropzone.classList.add('drag-over');
+            }
+        }
+
+        function handleDragLeave(e) {
+            const dropzone = e.target.closest('.mmlc-card, .border-dashed, #unassignedList');
+            if (dropzone) {
+                dropzone.classList.remove('drag-over');
+            }
+        }
+
+        function handleDropToSeat(e, targetSeatId) {
+            e.preventDefault();
+            const dropzone = e.target.closest('.mmlc-card, .border-dashed');
+            if (dropzone) dropzone.classList.remove('drag-over');
+
+            const draggedElem = document.querySelector('.dragging');
+            if (draggedElem) draggedElem.classList.remove('dragging');
+
+            if (!draggedStudentId) return;
+
+            const existingStudentAtTarget = seats[targetSeatId];
+
+            if (dragSourceSeatId) {
+                if (dragSourceSeatId === targetSeatId) return;
+                seats[dragSourceSeatId] = existingStudentAtTarget || null;
+            }
+
+            seats[targetSeatId] = draggedStudentId;
+
+            draggedStudentId = null;
+            dragSourceSeatId = null;
+            cancelTouchSelection();
+
+            saveState();
+            renderMmlcGrid();
+            renderUnassignedList();
+        }
+
+        function handleDropToUnassigned(e) {
+            e.preventDefault();
+            const draggedElem = document.querySelector('.dragging');
+            if (draggedElem) draggedElem.classList.remove('dragging');
+
+            if (draggedStudentId && dragSourceSeatId) {
+                seats[dragSourceSeatId] = null;
+                saveState();
+                renderMmlcGrid();
+                renderUnassignedList();
+            }
+
+            draggedStudentId = null;
+            dragSourceSeatId = null;
+            cancelTouchSelection();
+        }
+
+        function handleTouchSelect(studentId, sourceSeatId) {
+            if (selectedTouchStudentId === studentId) {
+                cancelTouchSelection();
+            } else {
+                selectedTouchStudentId = studentId;
+                dragSourceSeatId = sourceSeatId;
+                draggedStudentId = studentId;
+
+                const student = students.find(s => s.id === studentId);
+                if (student) {
+                    document.getElementById('selectedStudentName').textContent = student.name;
+                    document.getElementById('touchSelectStatus').classList.remove('hidden');
+                }
+
+                renderMmlcGrid();
+                renderUnassignedList();
+            }
+        }
+
+        function handleTouchDrop(targetSeatId) {
+            if (!selectedTouchStudentId) return;
+
+            const existingStudentAtTarget = seats[targetSeatId];
+
+            if (dragSourceSeatId) {
+                if (dragSourceSeatId === targetSeatId) {
+                    cancelTouchSelection();
+                    return;
+                }
+                seats[dragSourceSeatId] = existingStudentAtTarget || null;
+            }
+
+            seats[targetSeatId] = selectedTouchStudentId;
+
+            saveState();
+            cancelTouchSelection();
+        }
+
+        function cancelTouchSelection() {
+            selectedTouchStudentId = null;
+            draggedStudentId = null;
+            dragSourceSeatId = null;
+            
+            const touchStatus = document.getElementById('touchSelectStatus');
+            if (touchStatus) touchStatus.classList.add('hidden');
+            
+            renderMmlcGrid();
+            renderUnassignedList();
+        }
+
+        function autoAssignRandom() {
+            if (students.length === 0) return;
+
+            const shuffledSeats = [...ALL_SEAT_IDS].sort(() => Math.random() - 0.5);
+
+            seats = {};
+            students.forEach((student, idx) => {
+                if (idx < shuffledSeats.length) {
+                    seats[shuffledSeats[idx]] = student.id;
+                }
+            });
+
+            saveState();
+            renderMmlcGrid();
+            renderUnassignedList();
+            showToast("已完成隨機分配", "fa-shuffle text-emerald-400");
+            toggleSidebar(false); // Auto hide after assigning all
+        }
+
+        function filterUnassignedStudents() {
+            renderUnassignedList();
+        }
+
+        function openUploadModal() {
+            document.getElementById('uploadModal').classList.remove('hidden');
+        }
+
+        function closeUploadModal() {
+            document.getElementById('uploadModal').classList.add('hidden');
+        }
+
+        function switchUploadTab(tab) {
+            if (tab === 'text') {
+                document.getElementById('tabText').classList.remove('hidden');
+                document.getElementById('tabCsv').classList.add('hidden');
+                document.getElementById('tabTextBtn').className = 'py-2 px-4 text-sm font-semibold text-blue-600 border-b-2 border-blue-600';
+                document.getElementById('tabCsvBtn').className = 'py-2 px-4 text-sm font-semibold text-slate-500 border-b-2 border-transparent';
+            } else {
+                document.getElementById('tabCsv').classList.remove('hidden');
+                document.getElementById('tabText').classList.add('hidden');
+                document.getElementById('tabCsvBtn').className = 'py-2 px-4 text-sm font-semibold text-blue-600 border-b-2 border-blue-600';
+                document.getElementById('tabTextBtn').className = 'py-2 px-4 text-sm font-semibold text-slate-500 border-b-2 border-transparent';
+            }
+        }
+
+        function handleTextImport() {
+            const text = document.getElementById('textImportArea').value;
+            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+            
+            if (lines.length > 0) {
+                const newStudents = [];
+                lines.forEach((line, index) => {
+                    const parsed = parseStudentLine(line, index + 1);
+                    if (parsed) newStudents.push(parsed);
+                });
+
+                if (newStudents.length > 0) {
+                    students = newStudents;
+                    if (students[0].className) {
+                        className = students[0].className;
+                        document.getElementById('classNameDisplay').textContent = className;
+                    }
+                    seats = {};
+                    saveState();
+                    renderMmlcGrid();
+                    renderUnassignedList();
+                    closeUploadModal();
+                    showToast(`成功匯入 ${students.length} 位學生`, "fa-check text-emerald-400");
+                    toggleSidebar(false); // Auto hide sidebar after successful import for cleaner view
+                }
+            }
+        }
+
+        function handleCSVFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    if (results.data && results.data.length > 0) {
+                        parseCSVData(results.data);
+                    }
+                }
+            });
+        }
+
+        function parseCSVData(rows) {
+            const newStudents = rows.map((row, idx) => {
+                const keys = Object.keys(row);
+                const classKey = keys.find(k => k.includes('班') || k.toLowerCase().includes('class')) || keys[0];
+                const noKey = keys.find(k => k.includes('號') || k.toLowerCase().includes('no') || k.toLowerCase().includes('num'));
+                const nameKey = keys.find(k => k.includes('中文') || k.includes('名') || k.toLowerCase().includes('cname') || k.toLowerCase().includes('name')) || keys[keys.length - 1];
+                const enNameKey = keys.find(k => k.includes('英文') || k.toLowerCase().includes('en') || k.toLowerCase().includes('english'));
+
+                return {
+                    id: 'std_' + (idx + 1) + '_' + Date.now(),
+                    className: row[classKey] ? row[classKey].toString().trim() : className,
+                    number: noKey && row[noKey] ? row[noKey].toString().trim() : String(idx + 1),
+                    name: row[nameKey] ? row[nameKey].toString().trim() : `學生 ${idx + 1}`,
+                    enName: enNameKey && row[enNameKey] ? row[enNameKey].toString().trim() : ''
+                };
+            });
+
+            if (newStudents.length > 0) {
+                students = newStudents;
+                if (students[0].className) {
+                    className = students[0].className;
+                    document.getElementById('classNameDisplay').textContent = className;
+                }
+                seats = {};
+                saveState();
+                renderMmlcGrid();
+                renderUnassignedList();
+                closeUploadModal();
+                showToast(`已從 CSV 匯入 ${students.length} 位學生`, "fa-check text-emerald-400");
+                toggleSidebar(false); // Auto hide sidebar after CSV import
+            }
+        }
+
+        function parseStudentLine(line, index) {
+            const parts = line.split(/[\s,\t]+/).filter(Boolean);
+            if (parts.length === 0) return null;
+
+            let parsedClass = className;
+            let parsedNo = String(index);
+            let parsedName = '';
+            let parsedEnName = '';
+
+            let idx = 0;
+
+            if (/^[0-9][A-Za-z]+$/i.test(parts[0])) {
+                parsedClass = parts[0];
+                idx++;
+            }
+
+            if (idx < parts.length && /^\d+$/.test(parts[idx])) {
+                parsedNo = parts[idx];
+                idx++;
+            }
+
+            const remaining = parts.slice(idx);
+            if (remaining.length > 0) {
+                const chineseParts = [];
+                const englishParts = [];
+
+                remaining.forEach(part => {
+                    if (/[\u4e00-\u9fa5]/.test(part)) {
+                        chineseParts.push(part);
+                    } else {
+                        englishParts.push(part);
+                    }
+                });
+
+                if (chineseParts.length > 0) {
+                    parsedName = chineseParts.join(' ');
+                    parsedEnName = englishParts.join(' ');
+                } else {
+                    parsedName = englishParts.join(' ');
+                }
+            } else {
+                parsedName = `學生 ${index}`;
+            }
+
+            return {
+                id: 'std_' + index + '_' + Date.now(),
+                className: parsedClass,
+                number: parsedNo,
+                name: parsedName,
+                enName: parsedEnName
+            };
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>
